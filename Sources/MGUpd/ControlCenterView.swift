@@ -225,12 +225,28 @@ private struct RepositoryCard: View {
     let repository: Repository
     let management: Bool
     let onDelete: () -> Void
+    @State private var expanded = false
 
     var body: some View {
         ControlPanel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text(repository.slug).font(.headline).textSelection(.enabled)
+                    Button {
+                        guard management else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            if management {
+                                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            }
+                            Text(repository.slug).font(.headline)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    .accessibilityValue(management ? (expanded ? "已展开" : "已收起") : "")
                     if repository.unread {
                         Text("未读").font(.caption.bold()).foregroundStyle(Color.accentColor)
                     }
@@ -246,6 +262,7 @@ private struct RepositoryCard: View {
                         .help("删除仓库").accessibilityLabel("删除 \(repository.slug)")
                     }
                 }
+                if !management || expanded {
                 if management { controls }
                 if let release = repository.latest {
                     ReleaseContent(release: release)
@@ -263,6 +280,14 @@ private struct RepositoryCard: View {
                 if let date = repository.lastChecked {
                     Text("上次成功检查：\(date.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                } else {
+                    HStack {
+                        if let release = repository.latest {
+                            Text(release.tagName).font(.callout).foregroundStyle(.secondary)
+                        }
+                        DownloadedTag(manager: model.downloads, repository: repository)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -310,14 +335,18 @@ private struct RepositoryDownloads: View {
             if let message = manager.selectionMessage(for: repository) {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
-            if let progress = manager.progress[repository.id] {
+            if manager.active.contains(repository.id), let progress = manager.progress[repository.id] {
                 ProgressView(value: progress.fraction)
                 Text("\(Int(progress.fraction * 100))% · \(ByteCountFormatter.string(fromByteCount: progress.receivedBytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file)) · 已完成 \(progress.completedAssets)/\(progress.totalAssets) · \(progress.filename)")
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack {
                 if manager.active.contains(repository.id) { ProgressView().controlSize(.small) }
-                Text(manager.status(for: repository.id)).font(.caption).textSelection(.enabled)
+                if manager.isDownloaded(repository), !manager.active.contains(repository.id) {
+                    DownloadedTag(manager: manager, repository: repository)
+                } else {
+                    Text(manager.status(for: repository.id)).font(.caption).textSelection(.enabled)
+                }
                 Spacer()
                 if manager.active.contains(repository.id) {
                     Button("取消下载") { manager.cancel(repository.id) }
@@ -339,6 +368,22 @@ private struct RepositoryDownloads: View {
             if let error = manager.storageError {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
+        }
+    }
+}
+
+private struct DownloadedTag: View {
+    @ObservedObject var manager: DownloadManager
+    let repository: Repository
+
+    var body: some View {
+        if manager.isDownloaded(repository), !manager.active.contains(repository.id) {
+            Label("已下载", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.green.opacity(0.12), in: Capsule())
         }
     }
 }
@@ -400,8 +445,8 @@ private struct ReleaseContent: View {
             .font(.caption).foregroundStyle(.secondary)
             if let body = release.body, !body.isEmpty {
                 DisclosureGroup("发布说明", isExpanded: $expanded) {
-                    // Render untrusted release notes literally, never as Markdown or HTML.
-                    Text(verbatim: body)
+                    Text((try? AttributedString(markdown: body,
+                        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body))
                         .font(.callout).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                 }

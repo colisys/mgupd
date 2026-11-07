@@ -89,6 +89,16 @@ public final class DownloadManager: ObservableObject {
         catch { return error.localizedDescription }
     }
 
+    public func isDownloaded(_ repository: Repository) -> Bool {
+        guard let release = repository.latest,
+              let assets = try? DownloadSelection.select(release.assets, patterns: configuration(for: repository.id).rule),
+              !assets.isEmpty else { return false }
+        return assets.allSatisfy { asset in
+            guard let path = entries[repository.id]?.completed["\(release.id)/\(asset.id)"] else { return false }
+            return FileManager.default.fileExists(atPath: path)
+        }
+    }
+
     public func configuration(for id: UUID) -> DownloadConfiguration { entries[id]?.configuration ?? .init() }
     public func status(for id: UUID) -> String { entries[id]?.message ?? "尚未下载" }
     public func setAutomatic(_ enabled: Bool, for id: UUID) {
