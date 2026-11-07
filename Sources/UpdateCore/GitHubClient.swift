@@ -3,14 +3,11 @@ import Foundation
 public enum GitHubClientError: Error, LocalizedError {
     case invalidResponse
     case httpStatus(Int, rateLimitReset: Date?)
-    case paginationLimitExceeded
 
     public var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "GitHub 返回了无效响应。"
-        case .paginationLimitExceeded:
-            return "此仓库的发布记录超过安全分页上限（10 页，每页 100 条）；未更新本地记录，以免建立不完整基线。"
         case let .httpStatus(status, reset):
             let message: String
             switch status {
@@ -112,12 +109,12 @@ public struct GitHubClient {
             if let link {
                 hasNext = link.range(of: #"rel\s*=\s*"[^"]*\bnext\b[^"]*""#, options: .regularExpression) != nil
             } else {
-                // A full page without pagination metadata cannot prove completeness.
+                // Without pagination metadata, keep reading full pages up to the limit.
                 hasNext = entries.count >= 100
             }
             if !hasNext { return result }
-            if page == 10 { throw GitHubClientError.paginationLimitExceeded }
         }
-        throw GitHubClientError.paginationLimitExceeded
+        // Monitoring uses a bounded recent window, not a complete release archive.
+        return result
     }
 }

@@ -120,18 +120,38 @@ final class GitHubClientTests: XCTestCase {
         }
     }
 
-    func testPaginationLimitThrowsRatherThanReturningPartialResults() async throws {
-        try await withClient({ request in
-            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
-            let page = Int(query.first { $0.name == "page" }!.value!)!
-            XCTAssertLessThanOrEqual(page, 10)
-            return (200, ["Link": "<https://api.github.com/next>; rel=\"next\""], try Self.payload([page]))
-        }) { client in
-            do {
-                _ = try await client.releases(for: "a/b", token: nil)
-                XCTFail("Expected pagination limit")
-            } catch let error as GitHubClientError {
-                guard case .paginationLimitExceeded = error else { return XCTFail("Wrong error") }
+    func testPaginationLimitReturnsRecentWindowAndEstablishesSilentBaseline() async throws {
+        for hasLink in [true, false] {
+            var requestedPages: [Int] = []
+            try await withClient({ request in
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                let page = Int(query.first { $0.name == "page" }!.value!)!
+                requestedPages.append(page)
+                XCTAssertLessThanOrEqual(page, 10)
+                let headers = hasLink ? ["Link": "<https://api.github.com/next>; rel=\"next\""] : [:]
+                let newestID = 1100 - (page - 1) * 100
+                return (200, headers, try Self.payload(Array(((newestID - 99)...newestID).reversed())))
+            }) { client in
+                let releases = try await client.releases(for: "a/b", token: nil)
+                XCTAssertEqual(requestedPages, Array(1...10))
+                XCTAssertEqual(releases.count, 1000)
+                XCTAssertEqual(releases.first?.id, 1100)
+                XCTAssertEqual(releases.last?.id, 101)
+
+                var repository = Repository(slug: "a/b")
+                XCTAssertTrue(repository.apply(releases, at: Date()).isEmpty)
+                XCTAssertTrue(repository.initialized)
+                XCTAssertFalse(repository.unread)
+                XCTAssertNil(repository.error)
+                XCTAssertEqual(repository.latest?.id, 1100)
+                XCTAssertTrue(repository.apply(releases, at: Date()).isEmpty)
+
+                let next = Release(id: 1101, tagName: "v1101",
+                                   htmlURL: URL(string: "https://github.com/a/b/releases/1101")!,
+                                   publishedAt: Date(), prerelease: false)
+                XCTAssertEqual(repository.apply([next] + releases, at: Date()).map(\.id), [1101])
+                XCTAssertTrue(repository.unread)
+                XCTAssertEqual(repository.latest?.id, 1101)
             }
         }
     }
